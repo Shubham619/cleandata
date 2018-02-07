@@ -1,0 +1,11 @@
+Package: cleandata
+Type: Package
+Title: This package is used for datacleaning.
+Version: 0.1.0
+Author: Shubham S. Deshmukh
+Maintainer: Shubham S. Deshmukh <shubhamdeshmukh40@yahoo.in>
+Description: This Package provide different functions which are used for datacleaning.
+License: No license
+Encoding: UTF-8
+LazyData: true
+functions: remove_timestamp,clean_first_col,remove_bracs,match_teacher_nm,adding_col_bind,load_narrange_UIDs,binding_block,load_workbook_sheetname
