@@ -1,0 +1,2 @@
+# cleandata
+To install this package use this- devtools::install_github("Shubham619/cleandata")  #Overview -remove_timestamp() :- to remove timestamp from data. -clean_first_col() :- for cleaning name column(must be your first column). -remove_bracs() :- removing brackets from column name and data between brackets. -adding_col_bind() :- creating dataframe with first two NA rows and NA column. -load_workbook_sheetname() :- loading worksheet and sheetname of it.
