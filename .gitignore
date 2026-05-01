@@ -1,0 +1,4 @@
+results_v6/
+run_v6_*.log
+__pycache__/
+*.pyc
