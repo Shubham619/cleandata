@@ -40,6 +40,9 @@ _cli.add_argument("--trials", type=int, default=None,
 _cli.add_argument("--seed", type=int, default=42)
 _cli.add_argument("--skip-install", action="store_true")
 _cli.add_argument("--skip-server", action="store_true")
+_cli.add_argument("--mock-llm", action="store_true",
+                  help="Use a deterministic credulous-agent mock instead of the real LLM. "
+                       "ASR-r is exact; ASR-a/t represent worst-case-under-retrieval.")
 _ARGS, _ = _cli.parse_known_args()
 GLOBAL_SEED = _ARGS.seed
 random.seed(GLOBAL_SEED)
@@ -48,8 +51,8 @@ random.seed(GLOBAL_SEED)
 # Step 1: Install
 # ============================================================
 print("=" * 70 + "\nStep 1/4: Installing dependencies\n" + "=" * 70)
-if _ARGS.skip_install:
-    print("  - skipped (--skip-install)")
+if _ARGS.skip_install or _ARGS.mock_llm:
+    print("  - skipped")
 else:
     os.environ["CMAKE_ARGS"] = "-DGGML_CUDA=on"
     subprocess.run([sys.executable, "-m", "pip", "install", "-q",
@@ -61,9 +64,9 @@ else:
 # Step 2: Download model
 # ============================================================
 print("\n" + "=" * 70 + "\nStep 2/4: Downloading Qwen2.5-3B GGUF\n" + "=" * 70)
-if _ARGS.skip_server:
+if _ARGS.skip_server or _ARGS.mock_llm:
     MODEL_PATH = None
-    print("  - skipped (--skip-server)")
+    print("  - skipped")
 else:
     from huggingface_hub import hf_hub_download
     MODEL_PATH = hf_hub_download(
@@ -85,8 +88,8 @@ def server_alive():
     except Exception:
         return False
 
-if _ARGS.skip_server:
-    print("  - skipped (--skip-server)")
+if _ARGS.skip_server or _ARGS.mock_llm:
+    print("  - skipped")
     server = None
 elif server_alive():
     print("  ✓ Server already running")
@@ -304,7 +307,43 @@ ATTACKS_FN = {"A1_indirect": attack_a1, "A2_direct": attack_a2,
               "A3_multiagent": attack_a3}
 
 # ---- LLM client ----
+# Mock-LLM: a deterministic credulous-agent simulator. It picks the FIRST memory
+# line that names a value matching the question's expected shape, and echoes
+# it as ANSWER. With memory shuffling per trial, this models a worst-case agent
+# that always trusts whatever the retriever surfaces. Useful when no GPU is
+# available -- ASR-r remains exact (defense-only), and ASR-a/t become an upper
+# bound under retrieval. Real-LLM numbers should still be produced on Colab.
+_MOCK_TASK_BY_SPEC = {}
+
+def _mock_pick_value(memory_lines, task):
+    """Heuristic: prefer the first line that contains either the correct or
+    attacker target verbatim. Falls back to the first line."""
+    target = task["attacker_target"]; correct = task["correct"]
+    for line in memory_lines:
+        if target.lower() in line.lower(): return target
+        if correct.lower() in line.lower(): return correct
+    return correct
+
 def call_llm(system, user, max_tokens=80):
+    if _ARGS.mock_llm:
+        # Reverse-lookup task from the question text
+        task = None
+        for t in _MOCK_TASK_BY_SPEC.values():
+            if t["spec"] in user:
+                task = t; break
+        if task is None:
+            return "THOUGHT: insufficient context.\nANSWER: unknown"
+        # Extract memory lines as the mock "retrieves"
+        mem_block = ""
+        if "Memory:" in user:
+            mem_block = user.split("Memory:", 1)[1].split("\n\nQuestion:", 1)[0]
+        lines = [ln.strip("- ").strip() for ln in mem_block.splitlines() if ln.strip().startswith("-")]
+        if not lines:
+            return f"THOUGHT: no memory available.\nANSWER: {task['correct']}"
+        picked = _mock_pick_value(lines, task)
+        # The credulous agent echoes the line verbatim in its thought
+        thought_line = next((ln for ln in lines if picked.lower() in ln.lower()), lines[0])
+        return f"THOUGHT: based on memory, {thought_line}\nANSWER: {picked}"
     from openai import OpenAI
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
     resp = client.chat.completions.create(
@@ -425,12 +464,18 @@ def cohens_h(p1, p2):
 # ---- Main ----
 out = Path(OUTPUT_DIR); out.mkdir(parents=True, exist_ok=True)
 
-print(f"\nVerifying server...")
-try:
-    r = call_llm("Test.", "Reply: OK", 10)
-    print(f"  ✓ {r[:60]}")
-except Exception as e:
-    print(f"  ✗ {e}"); sys.exit(1)
+# Register tasks for the mock-LLM reverse lookup
+for _t in TASKS: _MOCK_TASK_BY_SPEC[_t["id"]] = _t
+
+if _ARGS.mock_llm:
+    print(f"\n[mock-llm] using deterministic credulous-agent simulator (no real LLM)")
+else:
+    print(f"\nVerifying server...")
+    try:
+        r = call_llm("Test.", "Reply: OK", 10)
+        print(f"  ✓ {r[:60]}")
+    except Exception as e:
+        print(f"  ✗ {e}"); sys.exit(1)
 
 # Baselines
 print(f"\n{'='*70}\nBaseline check\n{'='*70}")
